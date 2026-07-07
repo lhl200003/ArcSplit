@@ -1,0 +1,32 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { @apply border-stone-200; }
+  html { scroll-behavior: smooth; }
+  body { @apply min-w-[320px] bg-[#fffaf2] font-[DM_Sans] text-[#2d1a10] antialiased; }
+  button, input { font: inherit; }
+  input[type='number'] { appearance: textfield; }
+}
+
+.font-serif { font-family: 'Playfair Display', Georgia, serif; }
+.mono { font-family: 'DM Mono', ui-monospace, monospace; }
+
+.orange-glow {
+  background:
+   radial-gradient(circle at 15% 5%, rgba(255, 188, 118, .7), transparent 33%),
+   radial-gradient(circle at 80% 15%, rgba(246, 135, 87, .26), transparent 26%),
+   linear-gradient(135deg, #fffaf2 0%, #fff4df 48%, #f6e3ce 100%);
+}
+
+.grain { position: relative; overflow: hidden; }
+.grain::after { content: ''; pointer-events: none; position: absolute; inset: 0; opacity: .24; background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.08'/%3E%3C/svg%3E"); mix-blend-mode: multiply; }
+
+.ember-ring { animation: ember-ring 12s linear infinite; }
+@keyframes ember-ring { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+@keyframes drift { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+.drift { animation: drift 5s ease-in-out infinite; }
