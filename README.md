@@ -1,5 +1,7 @@
 # ArcSplit
 
+![ArcSplit homepage](./772e1d6b101c03d367383f7a01d298ad.png)
+
 ArcSplit is a non-custodial USDC revenue-sharing app built for Arc Testnet. It lets creators, teams, agencies, and communities define immutable payout splits, fund a vault once, and let each recipient claim their share directly from their own wallet.
 
 ## What problem it solves
