@@ -44,9 +44,15 @@ export async function connectWallet(provider: WalletProvider) {
   return { address: address as Address, chainId }
 }
 
-export function isArcChain(chainId?: string) { return chainId?.toLowerCase() === ARC_CHAIN_HEX.toLowerCase() }
+export function isArcChain(chainId?: string) {
+  if (!chainId) return false
+  const numeric = chainId.startsWith('0x') || chainId.startsWith('0X') ? Number.parseInt(chainId, 16) : Number(chainId)
+  return numeric === ARC_CHAIN_ID
+}
 
 export async function switchToArc(provider: WalletProvider) {
+  const current = await provider.request({ method: 'eth_chainId' }) as string
+  if (isArcChain(current)) return
   try {
     await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: ARC_CHAIN_HEX }] })
   } catch (error) {
