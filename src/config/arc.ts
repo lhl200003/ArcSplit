@@ -1,7 +1,7 @@
 import { defineChain } from 'viem'
 
 export const ARC_CHAIN_ID = 5_042_002
-export const ARC_CHAIN_HEX = '0x4CF1D2'
+export const ARC_CHAIN_HEX = '0x4CEF52'
 export const ARC_RPC_URL = 'https://rpc.testnet.arc.network'
 export const ARC_EXPLORER_URL = 'https://testnet.arcscan.app'
 export const ARC_USDC_ADDRESS = '0x3600000000000000000000000000000000000000' as const
