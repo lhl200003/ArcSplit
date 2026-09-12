@@ -44,6 +44,42 @@ export async function connectWallet(provider: WalletProvider) {
   return { address: address as Address, chainId }
 }
 
+const LAST_WALLET_KEY = 'arcsplit.lastWallet'
+
+export function rememberWallet(wallet: BrowserWallet) {
+  localStorage.setItem(LAST_WALLET_KEY, JSON.stringify({ uuid: wallet.info.uuid, rdns: wallet.info.rdns }))
+}
+
+export function forgetWallet() {
+  localStorage.removeItem(LAST_WALLET_KEY)
+}
+
+export async function reconnectLastWallet(wallets: BrowserWallet[]) {
+  const raw = localStorage.getItem(LAST_WALLET_KEY)
+  if (!raw || wallets.length === 0) return null
+  try {
+    const saved = JSON.parse(raw) as { uuid?: string; rdns?: string }
+    const wallet = wallets.find((item) => item.info.uuid === saved.uuid)
+      || wallets.find((item) => item.info.rdns && item.info.rdns === saved.rdns)
+    if (!wallet) return null
+    const accounts = await wallet.provider.request({ method: 'eth_accounts' }) as string[]
+    const address = accounts?.[0]
+    if (!address || !isAddress(address)) return null
+    const chainId = await wallet.provider.request({ method: 'eth_chainId' }) as string
+    return { wallet, address: address as Address, chainId }
+  } catch {
+    return null
+  }
+}
+
+export async function revokeWalletSession(provider: WalletProvider) {
+  try {
+    await provider.request({ method: 'wallet_revokePermissions', params: [{ eth_accounts: {} }] })
+  } catch {
+    /* not all wallets support this */
+  }
+}
+
 export function isArcChain(chainId?: string) {
   if (!chainId) return false
   const numeric = chainId.startsWith('0x') || chainId.startsWith('0X') ? Number.parseInt(chainId, 16) : Number(chainId)
