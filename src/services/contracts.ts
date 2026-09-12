@@ -2,7 +2,8 @@ import { getAddress, isAddress, parseEventLogs, parseUnits, type Address } from 
 import { ARC_USDC_ADDRESS } from '../config/arc'
 import { arcPublicClient, getWalletClient, type WalletProvider } from './wallet'
 
-const configuredFactory = import.meta.env.VITE_ARC_SPLIT_FACTORY_ADDRESS
+const FALLBACK_FACTORY = '0x7181198ee7c390D2eCC9B7d856A0ACB12Bcf2746'
+const configuredFactory = import.meta.env.VITE_ARC_SPLIT_FACTORY_ADDRESS || FALLBACK_FACTORY
 export const factoryAddress = configuredFactory && isAddress(configuredFactory) ? getAddress(configuredFactory) : undefined
 export const isFactoryConfigured = Boolean(factoryAddress)
 
@@ -14,6 +15,8 @@ export const erc20Abi = [
 export const factoryAbi = [
   { type: 'function', name: 'createSplit', stateMutability: 'nonpayable', inputs: [{ name: 'recipients', type: 'address[]' }, { name: 'bps', type: 'uint16[]' }], outputs: [{ name: 'vault', type: 'address' }] },
   { type: 'function', name: 'getVaultsByOwner', stateMutability: 'view', inputs: [{ name: 'owner', type: 'address' }], outputs: [{ type: 'address[]' }] },
+  { type: 'function', name: 'allVaults', stateMutability: 'view', inputs: [{ type: 'uint256' }], outputs: [{ type: 'address' }] },
+  { type: 'function', name: 'allVaultsLength', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
   { type: 'event', name: 'SplitCreated', inputs: [{ indexed: true, name: 'owner', type: 'address' }, { indexed: true, name: 'vault', type: 'address' }, { indexed: false, name: 'recipients', type: 'uint256' }], anonymous: false },
 ] as const
 
@@ -36,7 +39,47 @@ function requireFactory(): Address {
 
 export async function listVaults(owner: Address) {
   const factory = requireFactory()
-  return arcPublicClient.readContract({ address: factory, abi: factoryAbi, functionName: 'getVaultsByOwner', args: [owner] })
+  const vaults = await arcPublicClient.readContract({ address: factory, abi: factoryAbi, functionName: 'getVaultsByOwner', args: [owner] })
+  return [...vaults]
+}
+
+/** Vaults this account created, is a recipient of, or opened via a share link. */
+export async function listAccessibleVaults(account: Address, extra: Address[] = []) {
+  const factory = requireFactory()
+  const owned = await listVaults(account)
+  const length = await arcPublicClient.readContract({ address: factory, abi: factoryAbi, functionName: 'allVaultsLength' })
+  const total = Number(length)
+  const start = Math.max(0, total - 80)
+  const recent = await Promise.all(
+    Array.from({ length: total - start }, (_, index) =>
+      arcPublicClient.readContract({ address: factory, abi: factoryAbi, functionName: 'allVaults', args: [BigInt(start + index)] }),
+    ),
+  )
+
+  const unique = [...new Set([...owned, ...recent, ...extra].map((value) => getAddress(value)))]
+  const accountHex = account.toLowerCase()
+  const extraSet = new Set(extra.map((value) => getAddress(value).toLowerCase()))
+  const ownedSet = new Set(owned.map((value) => getAddress(value).toLowerCase()))
+
+  const visible: Address[] = []
+  await Promise.all(unique.map(async (vault) => {
+    if (ownedSet.has(vault.toLowerCase()) || extraSet.has(vault.toLowerCase())) {
+      visible.push(vault)
+      return
+    }
+    try {
+      const [recipients] = await arcPublicClient.readContract({ address: vault, abi: vaultAbi, functionName: 'getRecipients' })
+      if (recipients.some((recipient) => recipient.toLowerCase() === accountHex)) visible.push(vault)
+    } catch {
+      /* ignore malformed vault addresses */
+    }
+  }))
+
+  const ordered = [...owned]
+  for (const vault of visible) {
+    if (!ordered.some((item) => item.toLowerCase() === vault.toLowerCase())) ordered.push(vault)
+  }
+  return ordered
 }
 
 export async function readVault(vault: Address, account: Address): Promise<VaultData> {
