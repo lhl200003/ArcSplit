@@ -120,7 +120,7 @@ export default function App() {
   async function refreshVaults(address = session?.address) {
     if (!address || !isFactoryConfigured) return
     try {
-      const list = await listVaults(address)
+      const list = [...await listVaults(address)]
       setVaults(list)
       setActiveVault((current) => current && list.includes(current) ? current : list[0])
     } catch (error) {
