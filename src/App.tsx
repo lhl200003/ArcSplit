@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   ArrowRight, BadgeCheck, Check, ChevronDown, CircleDollarSign, Copy, ExternalLink,
-  Flame, Gauge, LayoutDashboard, Loader2, Menu, Network, Plus, ReceiptText,
+  Flame, Gauge, LayoutDashboard, Loader2, LogOut, Menu, Network, Plus, ReceiptText,
   RefreshCw, ShieldCheck, Sparkles, Split, UsersRound, WalletCards, X,
 } from 'lucide-react'
 import { isAddress, parseUnits, type Address } from 'viem'
@@ -13,7 +13,7 @@ import { vaultFromLocation, vaultSharePath, writeVaultIntoUrl, nameFromLocation 
 import { loadVaultNames, saveVaultNames, vaultNameKey } from './lib/vaultNames'
 import { HomeView } from './components/HomeView'
 import { WalletDialog } from './components/WalletDialog'
-import { connectWallet, discoverBrowserWallets, getArcUsdcBalance, isArcChain, switchToArc, type BrowserWallet } from './services/wallet'
+import { connectWallet, discoverBrowserWallets, forgetWallet, getArcUsdcBalance, isArcChain, reconnectLastWallet, rememberWallet, revokeWalletSession, switchToArc, type BrowserWallet } from './services/wallet'
 import {
   approveUsdc, claimFromVault, createSplit, depositToVault, isFactoryConfigured,
   listAccessibleVaults, readAllowance, readVault, type VaultData,
@@ -87,6 +87,15 @@ export default function App() {
   useEffect(() => { discoverBrowserWallets().then(setWallets).catch(() => setWallets([])) }, [])
 
   useEffect(() => {
+    if (session || wallets.length === 0) return
+    let cancelled = false
+    reconnectLastWallet(wallets).then((restored) => {
+      if (!cancelled && restored) setSession(restored)
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [wallets, session])
+
+  useEffect(() => {
     const stored = loadVaultNames()
     const linkedName = nameFromLocation()
     if (linkedVault && linkedName) {
@@ -156,12 +165,23 @@ export default function App() {
     setBusy('connect'); setNotice(null)
     try {
       const { address, chainId } = await connectWallet(wallet.provider)
+      rememberWallet(wallet)
       setSession({ wallet, address, chainId })
       setWalletOpen(false)
       setNotice({ type: 'success', message: `${wallet.info.name} is connected. ArcSplit will never request or store your private key.` })
     } catch (error) {
       setNotice({ type: 'error', message: error instanceof Error ? error.message : 'Wallet connection was not completed.' })
     } finally { setBusy(null) }
+  }
+
+  async function handleDisconnect() {
+    const provider = session?.wallet.provider
+    forgetWallet()
+    setSession(null)
+    setBalance(undefined)
+    setVaultData(undefined)
+    setNotice({ type: 'info', message: 'Wallet disconnected. Refreshing the page will stay disconnected until you connect again.' })
+    if (provider) await revokeWalletSession(provider)
   }
 
   async function handleSwitch() {
@@ -280,15 +300,15 @@ export default function App() {
         <button onClick={() => setView('home')} className="flex items-center gap-3 text-left"><Mark /><span><span className="block font-serif text-xl font-semibold tracking-tight text-[#2d1a10]">ArcSplit</span><span className="block text-[10px] font-bold uppercase tracking-[.18em] text-stone-500">Distribution OS</span></span></button>
         <nav className="hidden items-center gap-7 text-sm font-semibold text-stone-600 md:flex"><button onClick={() => setView('home')} className="hover:text-orange-700">Overview</button><a href="#how-it-works" className="hover:text-orange-700">Mechanics</a><button onClick={() => setView('terminal')} className="hover:text-orange-700">Terminal</button></nav>
         <div className="hidden items-center gap-2 md:flex">
-          {session ? <><button onClick={handleSwitch} className={cn('rounded-xl border px-3 py-2 text-xs font-bold', onArc ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-orange-200 bg-orange-50 text-orange-700')}><span className="mr-1.5 inline-block size-1.5 rounded-full bg-current" />{onArc ? 'Arc Testnet' : 'Switch to Arc'}</button><button onClick={() => setView('terminal')} className="mono rounded-xl bg-[#301b11] px-3.5 py-2.5 text-xs font-medium text-[#ffddb0]">{shortAddress(session.address)}</button></> : <button onClick={() => setWalletOpen(true)} className="rounded-xl bg-[#301b11] px-4 py-2.5 text-sm font-bold text-[#ffddb0] shadow-[0_8px_20px_rgba(60,30,10,.16)] transition hover:-translate-y-0.5">Connect wallet</button>}
+          {session ? <><button onClick={handleSwitch} className={cn('rounded-xl border px-3 py-2 text-xs font-bold', onArc ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-orange-200 bg-orange-50 text-orange-700')}><span className="mr-1.5 inline-block size-1.5 rounded-full bg-current" />{onArc ? 'Arc Testnet' : 'Switch to Arc'}</button><button onClick={() => setView('terminal')} className="mono rounded-xl bg-[#301b11] px-3.5 py-2.5 text-xs font-medium text-[#ffddb0]">{shortAddress(session.address)}</button><button onClick={handleDisconnect} title="Disconnect wallet" className="grid size-10 place-items-center rounded-xl border border-stone-200 bg-white text-stone-600 transition hover:border-orange-300 hover:bg-orange-50 hover:text-orange-700"><LogOut className="size-4" /></button></> : <button onClick={() => setWalletOpen(true)} className="rounded-xl bg-[#301b11] px-4 py-2.5 text-sm font-bold text-[#ffddb0] shadow-[0_8px_20px_rgba(60,30,10,.16)] transition hover:-translate-y-0.5">Connect wallet</button>}
         </div>
         <button className="md:hidden" onClick={() => setMenuOpen((value) => !value)}>{menuOpen ? <X /> : <Menu />}</button>
       </div>
-      <AnimatePresence>{menuOpen && <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="border-t border-stone-200 bg-[#fffaf2] px-5 pb-5 pt-2 md:hidden"><div className="grid gap-1 text-sm font-semibold text-stone-700"><button onClick={() => { setView('home'); setMenuOpen(false) }} className="rounded-xl px-3 py-2 text-left hover:bg-orange-50">Overview</button><button onClick={() => { setView('terminal'); setMenuOpen(false) }} className="rounded-xl px-3 py-2 text-left hover:bg-orange-50">Open terminal</button><button onClick={() => { setWalletOpen(true); setMenuOpen(false) }} className="rounded-xl px-3 py-2 text-left hover:bg-orange-50">Connect wallet</button></div></motion.div>}</AnimatePresence>
+      <AnimatePresence>{menuOpen && <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="border-t border-stone-200 bg-[#fffaf2] px-5 pb-5 pt-2 md:hidden"><div className="grid gap-1 text-sm font-semibold text-stone-700"><button onClick={() => { setView('home'); setMenuOpen(false) }} className="rounded-xl px-3 py-2 text-left hover:bg-orange-50">Overview</button><button onClick={() => { setView('terminal'); setMenuOpen(false) }} className="rounded-xl px-3 py-2 text-left hover:bg-orange-50">Open terminal</button>{session ? <button onClick={() => { handleDisconnect(); setMenuOpen(false) }} className="rounded-xl px-3 py-2 text-left hover:bg-orange-50">Disconnect wallet</button> : <button onClick={() => { setWalletOpen(true); setMenuOpen(false) }} className="rounded-xl px-3 py-2 text-left hover:bg-orange-50">Connect wallet</button>}</div></motion.div>}</AnimatePresence>
     </header>
 
     {view === 'home' ? <HomeView onOpenTerminal={() => setView('terminal')} /> : <section className="mx-auto max-w-7xl px-5 py-8 lg:px-8 lg:py-10">
-      <div className="mb-6 flex flex-col justify-between gap-4 lg:flex-row lg:items-center"><div><div className="flex items-center gap-2"><Chip tone="green"><span className="size-1.5 rounded-full bg-emerald-500" />Arc Testnet</Chip>{!isFactoryConfigured && <Chip>Deployment setup required</Chip>}</div><h1 className="mt-4 font-serif text-4xl font-semibold tracking-tight">Distribution terminal</h1><p className="mt-1 text-sm text-stone-500">Create a split, fund it with USDC, and watch claimable balances settle onchain. <a href={ARC_FAUCET_URL} target="_blank" rel="noreferrer" className="font-semibold text-orange-700 hover:underline">Get testnet USDC</a></p></div><div className="flex items-center gap-2"><IconButton label="Refresh dashboard" onClick={() => { if (session?.address) { refreshBalance(); refreshVaults(); refreshVault() } }}><RefreshCw className={cn('size-4', busy === 'refresh' && 'animate-spin')} /></IconButton>{session ? <button onClick={() => navigator.clipboard.writeText(session.address)} className="mono inline-flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-3.5 py-3 text-xs font-medium text-stone-700 hover:border-orange-300"><span className={cn('size-2 rounded-full', onArc ? 'bg-emerald-500' : 'bg-orange-500')} />{shortAddress(session.address)}<Copy className="size-3 text-stone-400" /></button> : <button onClick={() => setWalletOpen(true)} className="inline-flex items-center gap-2 rounded-xl bg-[#301b11] px-4 py-3 text-sm font-bold text-[#ffddb0]"><WalletCards className="size-4" />Connect wallet</button>}</div></div>
+      <div className="mb-6 flex flex-col justify-between gap-4 lg:flex-row lg:items-center"><div><div className="flex items-center gap-2"><Chip tone="green"><span className="size-1.5 rounded-full bg-emerald-500" />Arc Testnet</Chip>{!isFactoryConfigured && <Chip>Deployment setup required</Chip>}</div><h1 className="mt-4 font-serif text-4xl font-semibold tracking-tight">Distribution terminal</h1><p className="mt-1 text-sm text-stone-500">Create a split, fund it with USDC, and watch claimable balances settle onchain. <a href={ARC_FAUCET_URL} target="_blank" rel="noreferrer" className="font-semibold text-orange-700 hover:underline">Get testnet USDC</a></p></div><div className="flex items-center gap-2"><IconButton label="Refresh dashboard" onClick={() => { if (session?.address) { refreshBalance(); refreshVaults(); refreshVault() } }}><RefreshCw className={cn('size-4', busy === 'refresh' && 'animate-spin')} /></IconButton>{session ? <><button onClick={() => navigator.clipboard.writeText(session.address)} className="mono inline-flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-3.5 py-3 text-xs font-medium text-stone-700 hover:border-orange-300"><span className={cn('size-2 rounded-full', onArc ? 'bg-emerald-500' : 'bg-orange-500')} />{shortAddress(session.address)}<Copy className="size-3 text-stone-400" /></button><button onClick={handleDisconnect} className="inline-flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-3 text-xs font-bold text-stone-600 hover:border-orange-300 hover:text-orange-700"><LogOut className="size-3.5" />Disconnect</button></> : <button onClick={() => setWalletOpen(true)} className="inline-flex items-center gap-2 rounded-xl bg-[#301b11] px-4 py-3 text-sm font-bold text-[#ffddb0]"><WalletCards className="size-4" />Connect wallet</button>}</div></div>
 
       {notice && <div className={cn('mb-6 flex items-start justify-between gap-4 rounded-2xl border px-4 py-3 text-sm', notice.type === 'error' ? 'border-red-200 bg-red-50 text-red-800' : notice.type === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-orange-200 bg-orange-50 text-orange-800')}><p>{notice.message}</p><button onClick={() => setNotice(null)} className="shrink-0 text-current/60 hover:text-current"><X className="size-4" /></button></div>}
       {!session && <div className="mb-6 rounded-[24px] border border-orange-200 bg-gradient-to-r from-orange-50 to-[#fff7eb] p-5"><div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="font-semibold text-[#4b2715]">Connect an EVM wallet to start.</p><p className="mt-1 text-sm text-stone-600">ArcSplit uses the connected account for all contract calls. Your private key never leaves your wallet.</p></div><button onClick={() => setWalletOpen(true)} className="shrink-0 rounded-xl bg-[#301b11] px-4 py-2.5 text-sm font-bold text-[#ffddb0]">Select wallet</button></div></div>}
