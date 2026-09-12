@@ -9,7 +9,8 @@ import { isAddress, parseUnits, type Address } from 'viem'
 import { ARC_CHAIN_ID, ARC_EXPLORER_URL } from './config/arc'
 import { cn, explorerAddress, explorerTx, formatUsdc, shortAddress } from './lib/utils'
 import { MAX_RECIPIENTS, validateSplit } from './lib/shares'
-import { vaultFromLocation, vaultSharePath, writeVaultIntoUrl } from './lib/vaultLink'
+import { vaultFromLocation, vaultSharePath, writeVaultIntoUrl, nameFromLocation } from './lib/vaultLink'
+import { loadVaultNames, saveVaultNames, vaultNameKey } from './lib/vaultNames'
 import { HomeView } from './components/HomeView'
 import { WalletDialog } from './components/WalletDialog'
 import { connectWallet, discoverBrowserWallets, getArcUsdcBalance, isArcChain, switchToArc, type BrowserWallet } from './services/wallet'
@@ -66,6 +67,8 @@ export default function App() {
   const [activeVault, setActiveVault] = useState<Address | undefined>(linkedVault)
   const [vaultData, setVaultData] = useState<VaultData>()
   const [depositAmount, setDepositAmount] = useState('25.00')
+  const [draftName, setDraftName] = useState('')
+  const [vaultNames, setVaultNames] = useState<Record<string, string>>({})
   const [activities, setActivities] = useState<Activity[]>([])
   const [busy, setBusy] = useState<'connect' | 'switch' | 'create' | 'fund' | 'claim' | 'refresh' | null>(null)
   const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null)
@@ -82,6 +85,16 @@ export default function App() {
   }, [vaultData])
 
   useEffect(() => { discoverBrowserWallets().then(setWallets).catch(() => setWallets([])) }, [])
+
+  useEffect(() => {
+    const stored = loadVaultNames()
+    const linkedName = nameFromLocation()
+    if (linkedVault && linkedName) {
+      stored[vaultNameKey(linkedVault)] = linkedName
+      saveVaultNames(stored)
+    }
+    setVaultNames(stored)
+  }, [])
 
   useEffect(() => {
     const provider = session?.wallet.provider
@@ -168,6 +181,23 @@ export default function App() {
     setRecipients((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, [field]: value } : row))
   }
 
+  function setVaultName(vault: Address, name: string) {
+    const key = vaultNameKey(vault)
+    const trimmed = name.trim().slice(0, 40)
+    setVaultNames((current) => {
+      const next = { ...current }
+      if (trimmed) next[key] = trimmed
+      else delete next[key]
+      saveVaultNames(next)
+      return next
+    })
+  }
+
+  function labelFor(vault: Address) {
+    const name = vaultNames[vaultNameKey(vault)]
+    return name ? `${name} · ${shortAddress(vault, 4)}` : shortAddress(vault, 6)
+  }
+
   async function handleCreate() {
     if (!session || !canCreate) return
     setBusy('create'); setNotice(null)
@@ -180,7 +210,8 @@ export default function App() {
       const { receipt, vault } = await createSplit(session.wallet.provider, session.address, recipientAddresses, checked.bps)
       addActivity({ id: activityId, title: 'Distribution vault created', detail: `A new immutable split rule is now live on Arc.`, state: 'success', hash: receipt.transactionHash })
       setActiveVault(vault)
-      writeVaultIntoUrl(vault)
+      if (draftName.trim()) setVaultName(vault, draftName)
+      writeVaultIntoUrl(vault, draftName.trim() || undefined)
       await refreshVaults(session.address)
       await refreshVault(vault, session.address)
       setTab('settle')
@@ -232,13 +263,13 @@ export default function App() {
     if (!isAddress(value)) return
     const vault = value as Address
     setActiveVault(vault)
-    writeVaultIntoUrl(vault)
+    writeVaultIntoUrl(vault, vaultNames[vaultNameKey(vault)])
     setTab('settle')
   }
 
   async function copyShareLink() {
     if (!activeVault) return
-    await navigator.clipboard.writeText(vaultSharePath(activeVault))
+    await navigator.clipboard.writeText(vaultSharePath(activeVault, vaultNames[vaultNameKey(activeVault)]))
     setNotice({ type: 'success', message: 'Share link copied. Recipients can open it and claim from their own wallet.' })
   }
 
@@ -268,12 +299,13 @@ export default function App() {
       <div className="grid gap-5 lg:grid-cols-[1.28fr_.72fr]">
         <div className="rounded-[28px] border border-stone-200 bg-[#fffdf8]/95 shadow-[0_20px_60px_rgba(86,48,20,.08)]"><div className="border-b border-stone-200 px-5 pt-5"><div className="flex gap-6"><TabButton selected={tab === 'create'} onClick={() => setTab('create')} icon={<Plus className="size-4" />} label="Create split" /><TabButton selected={tab === 'settle'} onClick={() => setTab('settle')} icon={<Gauge className="size-4" />} label="Fund & settle" /></div></div>
           <div className="p-5 sm:p-6"><AnimatePresence mode="wait">{tab === 'create' ? <motion.div key="create" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}><div className="flex items-start justify-between gap-4"><div><h2 className="font-serif text-2xl font-semibold">Create a distribution rule</h2><p className="mt-1 text-sm leading-6 text-stone-500">Each recipient and percentage is written into a dedicated ArcSplit vault. The allocation becomes immutable after creation.</p></div><span className={cn('rounded-xl px-2.5 py-2 text-xs font-bold', Math.abs(totalShare - 100) < 0.001 ? 'bg-emerald-50 text-emerald-700' : 'bg-orange-50 text-orange-700')}>{totalShare.toFixed(2)}% / 100%</span></div>
+            <div className="mt-5"><label className="mb-1 block text-[10px] font-bold uppercase tracking-[.12em] text-stone-400">Split name (optional)</label><input value={draftName} onChange={(event) => setDraftName(event.target.value)} maxLength={40} placeholder="Team payout, collab split…" className="w-full rounded-2xl border border-stone-200 bg-white px-3 py-3 text-sm text-stone-800 outline-none placeholder:text-stone-300 focus:border-orange-400" /><p className="mt-1 text-xs text-stone-500">Kept in this browser. Share links can include the name so recipients see it too.</p></div>
             <div className="mt-6 space-y-3">{recipients.map((row, index) => <div key={index} className="grid gap-3 rounded-2xl border border-stone-200 bg-white p-3 sm:grid-cols-[1fr_132px_40px] sm:items-center"><div><label className="mb-1 block text-[10px] font-bold uppercase tracking-[.12em] text-stone-400">Recipient {index + 1}</label><input value={row.address} onChange={(event) => updateRecipient(index, 'address', event.target.value)} placeholder="0x… wallet address" className="mono w-full bg-transparent text-sm text-stone-800 outline-none placeholder:text-stone-300" /></div><div className="border-t border-stone-100 pt-2 sm:border-l sm:border-t-0 sm:pl-3 sm:pt-0"><label className="mb-1 block text-[10px] font-bold uppercase tracking-[.12em] text-stone-400">Share</label><div className="flex items-center"><input value={row.share} onChange={(event) => updateRecipient(index, 'share', event.target.value)} type="number" min="0" max="100" step="0.01" className="w-full bg-transparent text-sm font-semibold text-stone-800 outline-none" /><span className="text-sm text-stone-400">%</span></div></div><button disabled={recipients.length <= 2} onClick={() => setRecipients((current) => current.filter((_, rowIndex) => rowIndex !== index))} className="grid size-9 place-items-center rounded-xl text-stone-400 transition hover:bg-red-50 hover:text-red-600 disabled:opacity-30"><X className="size-4" /></button></div>)}</div>
             <div className="mt-4 flex flex-wrap items-center justify-between gap-3"><button disabled={recipients.length >= MAX_RECIPIENTS} onClick={() => setRecipients((current) => [...current, { address: '', share: '' }])} className="inline-flex items-center gap-1.5 rounded-xl border border-dashed border-orange-300 px-3 py-2 text-xs font-bold text-orange-700 hover:bg-orange-50 disabled:opacity-40"><Plus className="size-3.5" />Add participant</button><p className="text-xs text-stone-500">2–{MAX_RECIPIENTS} wallets · shares must total 100% · last share absorbs 0.01% rounding</p></div>
             {!splitCheck.ok && recipients.every((row) => row.address.trim() && row.share !== '') && <p className="mt-3 text-xs leading-5 text-orange-800/80">{splitCheck.message}</p>}
             <button onClick={handleCreate} disabled={!canCreate} className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[#301b11] px-5 py-4 text-sm font-bold text-[#ffddb0] shadow-[0_12px_28px_rgba(72,34,11,.18)] transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-45">{busy === 'create' ? <Loader2 className="size-4 animate-spin" /> : <Split className="size-4" />}{busy === 'create' ? 'Confirming on Arc…' : !session ? 'Connect wallet to create' : !onArc ? 'Switch to Arc Testnet' : !isFactoryConfigured ? 'Deploy factory first' : 'Create immutable split'}</button>
-          </motion.div> : <motion.div key="settle" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}><div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between"><div><h2 className="font-serif text-2xl font-semibold">Fund and settle</h2><p className="mt-1 text-sm leading-6 text-stone-500">A deposit immediately records each recipient’s claimable USDC balance in the selected vault.</p></div>{vaults.length > 0 && <select value={activeVault ?? ''} onChange={(event) => useVault(event.target.value)} className="mono max-w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs outline-none"><option value="">Select a vault</option>{vaults.map((vault) => <option key={vault} value={vault}>{shortAddress(vault, 6)}</option>)}</select>}</div>
-            {!activeVault ? <div className="mt-7 rounded-2xl border border-dashed border-stone-300 bg-stone-50 p-7 text-center"><Split className="mx-auto size-6 text-stone-400" /><p className="mt-3 font-semibold text-stone-700">No split vault selected</p><p className="mx-auto mt-1 max-w-sm text-sm leading-6 text-stone-500">Create your first split rule, or paste a deployed ArcSplit vault address below to inspect and use it.</p><div className="mx-auto mt-4 flex max-w-sm gap-2"><input placeholder="0x… vault address" onKeyDown={(event) => { if (event.key === 'Enter') useVault(event.currentTarget.value) }} className="mono min-w-0 flex-1 rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs outline-none focus:border-orange-400" /><button onClick={(event) => { const input = event.currentTarget.previousElementSibling as HTMLInputElement; useVault(input.value) }} className="rounded-xl bg-[#301b11] px-3 text-xs font-bold text-[#ffddb0]">Open</button></div></div> : <><div className="mt-6 grid gap-3 sm:grid-cols-3"><Metric icon={<CircleDollarSign className="size-4" />} label="Vault funded" value={`${formatUsdc(vaultData?.totalDeposited)} USDC`} /><Metric icon={<WalletCards className="size-4" />} label="Your wallet" value={`${formatUsdc(balance)} USDC`} /><Metric icon={<BadgeCheck className="size-4" />} label="Your claimable" value={`${formatUsdc(vaultData?.claimable)} USDC`} /></div>
+          </motion.div> : <motion.div key="settle" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}><div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between"><div><h2 className="font-serif text-2xl font-semibold">Fund and settle</h2><p className="mt-1 text-sm leading-6 text-stone-500">A deposit immediately records each recipient’s claimable USDC balance in the selected vault.</p></div>{vaults.length > 0 && <select value={activeVault ?? ''} onChange={(event) => useVault(event.target.value)} className="max-w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs outline-none"><option value="">Select a vault</option>{vaults.map((vault) => <option key={vault} value={vault}>{labelFor(vault)}</option>)}</select>}</div>
+            {!activeVault ? <div className="mt-7 rounded-2xl border border-dashed border-stone-300 bg-stone-50 p-7 text-center"><Split className="mx-auto size-6 text-stone-400" /><p className="mt-3 font-semibold text-stone-700">No split vault selected</p><p className="mx-auto mt-1 max-w-sm text-sm leading-6 text-stone-500">Create your first split rule, or paste a deployed ArcSplit vault address below to inspect and use it.</p><div className="mx-auto mt-4 flex max-w-sm gap-2"><input placeholder="0x… vault address" onKeyDown={(event) => { if (event.key === 'Enter') useVault(event.currentTarget.value) }} className="mono min-w-0 flex-1 rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs outline-none focus:border-orange-400" /><button onClick={(event) => { const input = event.currentTarget.previousElementSibling as HTMLInputElement; useVault(input.value) }} className="rounded-xl bg-[#301b11] px-3 text-xs font-bold text-[#ffddb0]">Open</button></div></div> : <><div className="mt-5 rounded-2xl border border-stone-200 bg-white p-4"><label className="mb-1 block text-[10px] font-bold uppercase tracking-[.12em] text-stone-400">Name this vault</label><input value={activeVault ? (vaultNames[vaultNameKey(activeVault)] ?? '') : ''} onChange={(event) => { if (!activeVault) return; setVaultName(activeVault, event.target.value); writeVaultIntoUrl(activeVault, event.target.value) }} maxLength={40} placeholder="e.g. Team payout" className="w-full bg-transparent text-sm font-semibold text-stone-800 outline-none placeholder:text-stone-300" /><p className="mt-1 text-xs text-stone-500">Local label only — the onchain split rule does not change.</p></div><div className="mt-6 grid gap-3 sm:grid-cols-3"><Metric icon={<CircleDollarSign className="size-4" />} label="Vault funded" value={`${formatUsdc(vaultData?.totalDeposited)} USDC`} /><Metric icon={<WalletCards className="size-4" />} label="Your wallet" value={`${formatUsdc(balance)} USDC`} /><Metric icon={<BadgeCheck className="size-4" />} label="Your claimable" value={`${formatUsdc(vaultData?.claimable)} USDC`} /></div>
               <div className="mt-5 rounded-2xl border border-orange-200 bg-gradient-to-br from-orange-50 to-[#fff8ee] p-4"><div className="flex items-center justify-between"><span className="text-sm font-semibold text-[#4b2715]">Fund this split</span><span className="mono text-xs text-orange-700">USDC · 6 decimals</span></div><div className="mt-3 flex gap-2 rounded-xl border border-orange-200 bg-white p-1.5"><input value={depositAmount} onChange={(event) => setDepositAmount(event.target.value)} type="number" min="0" step="0.01" className="min-w-0 flex-1 bg-transparent px-2 text-xl font-semibold text-[#3a2114] outline-none" /><button onClick={handleFund} disabled={!canFund} className="rounded-lg bg-orange-700 px-4 text-sm font-bold text-white transition hover:bg-orange-800 disabled:cursor-not-allowed disabled:opacity-45">{busy === 'fund' ? <Loader2 className="size-4 animate-spin" /> : 'Approve & fund'}</button></div><p className="mt-3 text-xs leading-5 text-stone-600">When allowance is insufficient, ArcSplit requests an exact USDC approval first. It then prompts a separate onchain deposit transaction. Wallet empty? <a href={ARC_FAUCET_URL} target="_blank" rel="noreferrer" className="font-semibold text-orange-700 hover:underline">Get testnet USDC from Circle Faucet</a>.</p></div>
               <div className="mt-5 grid gap-4 sm:grid-cols-[1.1fr_.9fr]"><div className="rounded-2xl border border-stone-200 bg-white p-4"><div className="flex items-center justify-between gap-2"><span className="text-sm font-semibold text-stone-800">Allocation map</span><div className="flex items-center gap-2"><button onClick={copyShareLink} className="inline-flex items-center gap-1 text-xs font-semibold text-orange-700">Copy share link <Copy className="size-3" /></button><a href={explorerAddress(activeVault)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs font-semibold text-orange-700">View vault <ExternalLink className="size-3" /></a></div></div><div className="mt-4 space-y-3">{allocationRows.map((row) => <div key={row.address}><div className="flex items-center justify-between gap-3 text-xs"><span className="mono truncate text-stone-600">{shortAddress(row.address, 6)}</span><span className="font-semibold text-stone-800">{(row.bps / 100).toFixed(2)}% · {formatUsdc(row.value)} USDC</span></div><div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-stone-100"><div className="h-full rounded-full bg-gradient-to-r from-[#d66630] to-[#f5bf76]" style={{ width: `${row.bps / 100}%` }} /></div></div>)}</div></div><div className="rounded-2xl border border-stone-200 bg-[#fff9f1] p-4"><span className="text-sm font-semibold text-stone-800">Claim your balance</span><p className="mt-2 text-sm leading-6 text-stone-500">Anyone listed as a recipient can call claim from their own wallet.</p><p className="mt-4 font-serif text-3xl font-semibold text-[#422114]">{formatUsdc(vaultData?.claimable)} <span className="text-base text-stone-500">USDC</span></p><button onClick={handleClaim} disabled={busy === 'claim' || !vaultData?.claimable || vaultData.claimable <= 0n} className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#301b11] px-4 py-3 text-sm font-bold text-[#ffddb0] disabled:cursor-not-allowed disabled:opacity-40">{busy === 'claim' ? <Loader2 className="size-4 animate-spin" /> : <ArrowRight className="size-4" />}Claim available USDC</button></div></div></>}
           </motion.div>}</AnimatePresence></div>
