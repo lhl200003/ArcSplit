@@ -68,6 +68,8 @@ package.json            Frontend package configuration
 PROJECT_SUMMARY.md      Short project overview
 README.md               Project documentation
 vite.config.ts          Vite configuration
+```
+
 ## Status
 
 Maintained on Arc Testnet. Last reviewed: 2026-09-12.
