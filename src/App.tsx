@@ -26,6 +26,25 @@ type RecipientForm = { address: string; share: string }
 type Activity = { id: string; title: string; detail: string; state: 'pending' | 'success' | 'error'; hash?: string }
 
 const ARC_FAUCET_URL = 'https://faucet.circle.com'
+const ACTIVITY_KEY = 'arcsplit.activityLog.v1'
+const ACTIVITY_LIMIT = 40
+
+function loadActivities(): Activity[] {
+  try {
+    const raw = localStorage.getItem(ACTIVITY_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as Activity[]
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((item) => item && item.id && item.state && item.state !== 'pending').slice(0, ACTIVITY_LIMIT)
+  } catch {
+    return []
+  }
+}
+
+function saveActivities(items: Activity[]) {
+  const stored = items.filter((item) => item.state !== 'pending').slice(0, ACTIVITY_LIMIT)
+  localStorage.setItem(ACTIVITY_KEY, JSON.stringify(stored))
+}
 
 const starterRecipients: RecipientForm[] = [
   { address: '', share: '50' },
@@ -69,7 +88,7 @@ export default function App() {
   const [depositAmount, setDepositAmount] = useState('25.00')
   const [draftName, setDraftName] = useState('')
   const [vaultNames, setVaultNames] = useState<Record<string, string>>({})
-  const [activities, setActivities] = useState<Activity[]>([])
+  const [activities, setActivities] = useState<Activity[]>(() => loadActivities())
   const [busy, setBusy] = useState<'connect' | 'switch' | 'create' | 'fund' | 'claim' | 'refresh' | null>(null)
   const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null)
 
@@ -134,8 +153,9 @@ export default function App() {
   function addActivity(next: Activity) {
     setActivities((current) => {
       const index = current.findIndex((item) => item.id === next.id)
-      if (index === -1) return [next, ...current]
-      const copy = [...current]; copy[index] = next; return copy
+      const copy = index === -1 ? [next, ...current] : current.map((item, itemIndex) => itemIndex === index ? next : item)
+      saveActivities(copy)
+      return copy.slice(0, ACTIVITY_LIMIT)
     })
   }
 
@@ -245,21 +265,24 @@ export default function App() {
   async function handleFund() {
     if (!session || !activeVault || !canFund) return
     setBusy('fund'); setNotice(null)
+    const stamp = Date.now()
+    const approvalId = `approval-${stamp}`
+    const depositId = `deposit-${stamp}`
     try {
       const amount = parseUnits(depositAmount, 6)
       const allowance = await readAllowance(session.address, activeVault)
       if (allowance < amount) {
-        addActivity({ id: 'approval', title: 'USDC approval requested', detail: 'Authorize this vault to pull the exact deposit amount.', state: 'pending' })
+        addActivity({ id: approvalId, title: 'USDC approval requested', detail: 'Authorize this vault to pull the exact deposit amount.', state: 'pending' })
         const approval = await approveUsdc(session.wallet.provider, session.address, activeVault, amount)
-        addActivity({ id: 'approval', title: 'USDC approval confirmed', detail: 'The vault can now receive this USDC deposit.', state: 'success', hash: approval.transactionHash })
+        addActivity({ id: approvalId, title: 'USDC approval confirmed', detail: 'The vault can now receive this USDC deposit.', state: 'success', hash: approval.transactionHash })
       }
-      addActivity({ id: 'deposit', title: 'Funding split vault', detail: 'Confirm the deposit in your wallet. The contract computes recipient claimables onchain.', state: 'pending' })
+      addActivity({ id: depositId, title: 'Funding split vault', detail: 'Confirm the deposit in your wallet. The contract computes recipient claimables onchain.', state: 'pending' })
       const receipt = await depositToVault(session.wallet.provider, session.address, activeVault, depositAmount)
-      addActivity({ id: 'deposit', title: 'USDC distribution recorded', detail: `${depositAmount} USDC is allocated across the vault’s recipients.`, state: 'success', hash: receipt.transactionHash })
+      addActivity({ id: depositId, title: 'USDC distribution recorded', detail: `${depositAmount} USDC is allocated across the vault’s recipients.`, state: 'success', hash: receipt.transactionHash })
       await Promise.all([refreshBalance(session.address), refreshVault(activeVault, session.address)])
       setNotice({ type: 'success', message: 'Funding confirmed. Recipients can now claim their proportional USDC balances.' })
     } catch (error) {
-      addActivity({ id: 'deposit', title: 'Funding failed', detail: error instanceof Error ? error.message : 'The deposit did not complete.', state: 'error' })
+      addActivity({ id: depositId, title: 'Funding failed', detail: error instanceof Error ? error.message : 'The deposit did not complete.', state: 'error' })
       setNotice({ type: 'error', message: error instanceof Error ? error.message : 'Deposit failed.' })
     } finally { setBusy(null) }
   }
@@ -267,14 +290,15 @@ export default function App() {
   async function handleClaim() {
     if (!session || !activeVault || !vaultData?.claimable || vaultData.claimable <= 0n) return
     setBusy('claim'); setNotice(null)
-    addActivity({ id: 'claim', title: 'Claim transaction requested', detail: 'Confirm in your wallet to receive your available USDC.', state: 'pending' })
+    const activityId = `claim-${Date.now()}`
+    addActivity({ id: activityId, title: 'Claim transaction requested', detail: 'Confirm in your wallet to receive your available USDC.', state: 'pending' })
     try {
       const receipt = await claimFromVault(session.wallet.provider, session.address, activeVault)
-      addActivity({ id: 'claim', title: 'USDC claim confirmed', detail: 'Your claimable balance was transferred from the vault to your wallet.', state: 'success', hash: receipt.transactionHash })
+      addActivity({ id: activityId, title: 'USDC claim confirmed', detail: 'Your claimable balance was transferred from the vault to your wallet.', state: 'success', hash: receipt.transactionHash })
       await Promise.all([refreshBalance(session.address), refreshVault(activeVault, session.address)])
       setNotice({ type: 'success', message: 'Claim completed. The USDC is now in your Arc wallet.' })
     } catch (error) {
-      addActivity({ id: 'claim', title: 'Claim failed', detail: error instanceof Error ? error.message : 'The claim did not complete.', state: 'error' })
+      addActivity({ id: activityId, title: 'Claim failed', detail: error instanceof Error ? error.message : 'The claim did not complete.', state: 'error' })
       setNotice({ type: 'error', message: error instanceof Error ? error.message : 'Claim failed.' })
     } finally { setBusy(null) }
   }
@@ -330,7 +354,7 @@ export default function App() {
               <div className="mt-5 grid gap-4 sm:grid-cols-[1.1fr_.9fr]"><div className="rounded-2xl border border-stone-200 bg-white p-4"><div className="flex items-center justify-between gap-2"><span className="text-sm font-semibold text-stone-800">Allocation map</span><div className="flex items-center gap-2"><button onClick={copyShareLink} className="inline-flex items-center gap-1 text-xs font-semibold text-orange-700">Copy share link <Copy className="size-3" /></button><a href={explorerAddress(activeVault)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs font-semibold text-orange-700">View vault <ExternalLink className="size-3" /></a></div></div><div className="mt-4 space-y-3">{allocationRows.map((row) => <div key={row.address}><div className="flex items-center justify-between gap-3 text-xs"><span className="mono truncate text-stone-600">{shortAddress(row.address, 6)}</span><span className="font-semibold text-stone-800">{(row.bps / 100).toFixed(2)}% · {formatUsdc(row.value)} USDC</span></div><div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-stone-100"><div className="h-full rounded-full bg-gradient-to-r from-[#d66630] to-[#f5bf76]" style={{ width: `${row.bps / 100}%` }} /></div></div>)}</div></div><div className="rounded-2xl border border-stone-200 bg-[#fff9f1] p-4"><span className="text-sm font-semibold text-stone-800">Claim your balance</span><p className="mt-2 text-sm leading-6 text-stone-500">Anyone listed as a recipient can call claim from their own wallet.</p><p className="mt-4 font-serif text-3xl font-semibold text-[#422114]">{formatUsdc(vaultData?.claimable)} <span className="text-base text-stone-500">USDC</span></p><button onClick={handleClaim} disabled={busy === 'claim' || !vaultData?.claimable || vaultData.claimable <= 0n} className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#301b11] px-4 py-3 text-sm font-bold text-[#ffddb0] disabled:cursor-not-allowed disabled:opacity-40">{busy === 'claim' ? <Loader2 className="size-4 animate-spin" /> : <ArrowRight className="size-4" />}Claim available USDC</button></div></div></>}
           </motion.div>}</AnimatePresence></div>
         </div>
-        <aside className="space-y-5"><div className="rounded-[28px] border border-stone-200 bg-[#301b11] p-5 text-[#fff1dc] shadow-[0_20px_60px_rgba(86,48,20,.14)]"><div className="flex items-center justify-between"><span className="text-sm font-semibold">Settlement integrity</span><ShieldCheck className="size-5 text-[#f0b96e]" /></div><div className="mt-5 space-y-4"><Integrity title="User-signed flows" text="Wallet signs creation, approval, deposit, and claims." /><Integrity title="Immutable split rules" text="Recipient addresses and basis-point shares cannot be edited after deployment." /><Integrity title="No platform account" text="The app cannot move vault funds or recover your wallet access." /></div></div><div className="rounded-[28px] border border-stone-200 bg-white/90 p-5"><div className="flex items-center justify-between"><div><p className="text-sm font-semibold text-stone-800">Onchain activity</p><p className="mt-1 text-xs text-stone-500">Recent interactions in this session</p></div><button onClick={() => setActivities([])} className="text-xs font-semibold text-stone-400 hover:text-stone-700">Clear</button></div><div className="mt-5 space-y-4">{activities.length === 0 ? <div className="rounded-2xl border border-dashed border-stone-200 bg-stone-50 px-4 py-6 text-center"><ReceiptText className="mx-auto size-5 text-stone-300" /><p className="mt-2 text-sm text-stone-500">Your signed activity will appear here.</p></div> : activities.map((item) => <div key={item.id} className="flex gap-3"><span className={cn('mt-0.5 grid size-6 shrink-0 place-items-center rounded-full', item.state === 'success' ? 'bg-emerald-100 text-emerald-700' : item.state === 'error' ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700')}>{item.state === 'pending' ? <Loader2 className="size-3 animate-spin" /> : item.state === 'success' ? <Check className="size-3" /> : <X className="size-3" />}</span><div className="min-w-0"><p className="text-xs font-semibold text-stone-800">{item.title}</p><p className="mt-0.5 text-xs leading-5 text-stone-500">{item.detail}</p><div className="mt-1"><TxLink hash={item.hash} /></div></div></div>)}</div></div></aside>
+        <aside className="space-y-5"><div className="rounded-[28px] border border-stone-200 bg-[#301b11] p-5 text-[#fff1dc] shadow-[0_20px_60px_rgba(86,48,20,.14)]"><div className="flex items-center justify-between"><span className="text-sm font-semibold">Settlement integrity</span><ShieldCheck className="size-5 text-[#f0b96e]" /></div><div className="mt-5 space-y-4"><Integrity title="User-signed flows" text="Wallet signs creation, approval, deposit, and claims." /><Integrity title="Immutable split rules" text="Recipient addresses and basis-point shares cannot be edited after deployment." /><Integrity title="No platform account" text="The app cannot move vault funds or recover your wallet access." /></div></div><div className="rounded-[28px] border border-stone-200 bg-white/90 p-5"><div className="flex items-center justify-between"><div><p className="text-sm font-semibold text-stone-800">Onchain activity</p><p className="mt-1 text-xs text-stone-500">Kept on this device after refresh</p></div><button onClick={() => { setActivities([]); saveActivities([]) }} className="text-xs font-semibold text-stone-400 hover:text-stone-700">Clear</button></div><div className="mt-5 space-y-4">{activities.length === 0 ? <div className="rounded-2xl border border-dashed border-stone-200 bg-stone-50 px-4 py-6 text-center"><ReceiptText className="mx-auto size-5 text-stone-300" /><p className="mt-2 text-sm text-stone-500">Your signed activity will appear here.</p></div> : activities.map((item) => <div key={item.id} className="flex gap-3"><span className={cn('mt-0.5 grid size-6 shrink-0 place-items-center rounded-full', item.state === 'success' ? 'bg-emerald-100 text-emerald-700' : item.state === 'error' ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700')}>{item.state === 'pending' ? <Loader2 className="size-3 animate-spin" /> : item.state === 'success' ? <Check className="size-3" /> : <X className="size-3" />}</span><div className="min-w-0"><p className="text-xs font-semibold text-stone-800">{item.title}</p><p className="mt-0.5 text-xs leading-5 text-stone-500">{item.detail}</p><div className="mt-1"><TxLink hash={item.hash} /></div></div></div>)}</div></div></aside>
       </div>
       <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-stone-200 bg-white/65 px-4 py-3 text-xs text-stone-500"><span>Arc chain ID <span className="mono font-medium text-stone-700">{ARC_CHAIN_ID}</span> · USDC is used for Arc gas and application settlement.</span><a href={ARC_EXPLORER_URL} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-semibold text-orange-700">Open ArcScan <ExternalLink className="size-3" /></a></div>
     </section>}
